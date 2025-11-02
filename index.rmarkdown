@@ -1,0 +1,459 @@
+---
+title: "YOUR TITLE GOES HERE ok"
+---
+
+```{r}
+#| echo: false
+#| message: false
+#| warning: false
+
+if(!require("leaflet")){
+    options(repos=c(CRAN="https://cloud.r-project.org"))
+    install.packages("leaflet")
+    stopifnot(require("leaflet"))
+}
+
+baruch_longitude <- -73.98333
+baruch_latitude  <- +40.74028
+
+leaflet() |>
+  addTiles() |>
+  setView(baruch_longitude, baruch_latitude, zoom=17) |>
+  addPopups(baruch_longitude, baruch_latitude, 
+            "I am a Master's student at <b>Baruch College</b>!")
+
+if(!dir.exists(file.path("data", "mp02"))){
+    dir.create(file.path("data", "mp02"), showWarnings=FALSE, recursive=TRUE)
+}
+
+library <- function(pkg){
+    ## Mask base::library() to automatically install packages if needed
+    ## Masking is important here so downlit picks up packages and links
+    ## to documentation
+    pkg <- as.character(substitute(pkg))
+    options(repos = c(CRAN = "https://cloud.r-project.org"))
+    if(!require(pkg, character.only=TRUE, quietly=TRUE)) install.packages(pkg)
+    stopifnot(require(pkg, character.only=TRUE, quietly=TRUE))
+}
+
+library(tidyverse)
+library(glue)
+library(readxl)
+library(tidycensus)
+
+get_acs_all_years <- function(variable, geography="cbsa",
+                              start_year=2009, end_year=2023){
+    fname <- glue("{variable}_{geography}_{start_year}_{end_year}.csv")
+    fname <- file.path("data", "mp02", fname)
+    
+    if(!file.exists(fname)){
+        YEARS <- seq(start_year, end_year)
+        YEARS <- YEARS[YEARS != 2020] # Drop 2020 - No survey (covid)
+        
+        ALL_DATA <- map(YEARS, function(yy){
+            tidycensus::get_acs(geography, variable, year=yy, survey="acs1") |>
+                mutate(year=yy) |>
+                select(-moe, -variable) |>
+                rename(!!variable := estimate)
+        }) |> bind_rows()
+        
+        write_csv(ALL_DATA, fname)
+    }
+    
+    read_csv(fname, show_col_types=FALSE)
+}
+
+# Household income (12 month)
+INCOME <- get_acs_all_years("B19013_001") |>
+    rename(household_income = B19013_001)
+
+# Monthly rent
+RENT <- get_acs_all_years("B25064_001") |>
+    rename(monthly_rent = B25064_001)
+
+# Total population
+POPULATION <- get_acs_all_years("B01003_001") |>
+    rename(population = B01003_001)
+
+# Total number of households
+HOUSEHOLDS <- get_acs_all_years("B11001_001") |>
+    rename(households = B11001_001)
+
+get_building_permits <- function(start_year = 2009, end_year = 2023){
+  fname <- glue("housing_units_{start_year}_{end_year}.csv")
+  fname <- file.path("data", "mp02", fname)
+
+  if (!file.exists(fname)) {
+    # ---- Historical TXT (<= 2018) ----
+    HISTORICAL_YEARS <- seq(start_year, 2018)
+    HISTORICAL_DATA <- purrr::map(HISTORICAL_YEARS, function(yy){
+      historical_url <- glue("https://www.census.gov/construction/bps/txt/tb3u{yy}.txt")
+      LINES <- readLines(historical_url, warn = FALSE)[-c(1:11)]
+      CBSA_LINES <- stringr::str_detect(LINES, "^[[:digit:]]")
+      CBSA <- as.integer(stringr::str_sub(LINES[CBSA_LINES], 5, 10))
+      PERMIT_LINES <- stringr::str_detect(stringr::str_sub(LINES, 48, 53), "[[:digit:]]")
+      PERMITS <- as.integer(stringr::str_sub(LINES[PERMIT_LINES], 48, 53))
+      tibble::tibble(CBSA = CBSA,
+                     new_housing_units_permitted = PERMITS,
+                     year = yy)
+    }) |> dplyr::bind_rows()
+
+    # ---- Current XLS/XLSX (>= 2019) ----
+    CURRENT_YEARS <- seq(2019, end_year)
+
+    safe_read_permit_excel <- function(path){
+      # Try xlsx first, then xls, then generic
+      out <- try(readxl::read_xlsx(path, skip = 5), silent = TRUE)
+      if (inherits(out, "try-error")) {
+        out <- try(readxl::read_xls(path,  skip = 5), silent = TRUE)
+      }
+      if (inherits(out, "try-error")) {
+        out <- readxl::read_excel(path,   skip = 5)
+      }
+      out
+    }
+
+    dl_file <- function(url, dest, tries = 3){
+      for (i in seq_len(tries)) {
+        # pick a method that works on Windows behind firewalls
+        method <- if (.Platform$OS.type == "windows") "wininet" else "libcurl"
+        utils::download.file(url, destfile = dest, mode = "wb", quiet = TRUE, method = method)
+        if (file.exists(dest) && file.size(dest) > 1024) return(invisible(TRUE))
+        Sys.sleep(1)
+      }
+      stop("Failed to download: ", url)
+    }
+
+    CURRENT_DATA <- purrr::map(CURRENT_YEARS, function(yy){
+      url <- glue("https://www.census.gov/construction/bps/xls/msaannual_{yy}99.xls")
+      tmp <- tempfile(fileext = ".xls")
+      dl_file(url, tmp, tries = 3)
+
+      dat <- safe_read_permit_excel(tmp) |>
+        tidyr::drop_na() |>
+        dplyr::select(CBSA, Total) |>
+        dplyr::mutate(year = yy) |>
+        dplyr::rename(new_housing_units_permitted = Total)
+
+      dat
+    }) |> dplyr::bind_rows()
+
+    ALL <- dplyr::bind_rows(HISTORICAL_DATA, CURRENT_DATA)
+    readr::write_csv(ALL, fname)
+  }
+
+  readr::read_csv(fname, show_col_types = FALSE)
+}
+
+PERMITS <- get_building_permits()
+# Where the cached files live
+list.files("data/mp02", full.names = TRUE)
+
+# Basic shapes
+sapply(list(INCOME=INCOME, RENT=RENT, POPULATION=POPULATION, HOUSEHOLDS=HOUSEHOLDS, PERMITS=PERMITS), dim)
+
+# Peek at each table
+INCOME |> dplyr::slice_head(n = 5)
+RENT   |> dplyr::slice_head(n = 5)
+POPULATION |> dplyr::slice_head(n = 5)
+HOUSEHOLDS |> dplyr::slice_head(n = 5)
+PERMITS |> dplyr::slice_head(n = 10)
+
+# Years covered in each table
+list(
+  INCOME_years = sort(unique(INCOME$year)),
+  RENT_years = sort(unique(RENT$year)),
+  POP_years = sort(unique(POPULATION$year)),
+  HHLDS_years = sort(unique(HOUSEHOLDS$year)),
+  PERMITS_years = sort(unique(PERMITS$year))
+)
+
+# Quick sanity checks on PERMITS
+PERMITS |> 
+  dplyr::summarise(
+    n_rows = dplyr::n(),
+    min_year = min(year, na.rm=TRUE),
+    max_year = max(year, na.rm=TRUE),
+    total_units = sum(new_housing_units_permitted, na.rm=TRUE)
+  )
+
+# Example: top 5 CBSAs by total permits (2010–2019)
+PERMITS |>
+  dplyr::filter(year >= 2010, year <= 2019) |>
+  dplyr::group_by(CBSA) |>
+  dplyr::summarise(total = sum(new_housing_units_permitted, na.rm=TRUE), .groups="drop") |>
+  dplyr::arrange(dplyr::desc(total)) |>
+  dplyr::slice_head(n = 5)
+
+ACS <- INCOME |>
+inner_join(RENT, by=c("GEOID","NAME","year")) |>
+inner_join(POPULATION, by=c("GEOID","NAME","year")) |>
+inner_join(HOUSEHOLDS, by=c("GEOID","NAME","year")) |>
+mutate(CBSA = as.double(GEOID),
+state = str_extract(NAME, ", (.{2})", group=1))
+
+perm_10_19 <- PERMITS |>
+filter(year >= 2010, year <= 2019) |>
+group_by(CBSA) |>
+summarise(total = sum(new_housing_units_permitted, na.rm=TRUE)) |>
+arrange(desc(total)) |>
+left_join(ACS |> filter(year==2019) |> distinct(CBSA, NAME), by="CBSA")
+
+head(perm_10_19, 5)
+
+# Build a single ACS table to use in plots
+ACS <- INCOME |>
+  dplyr::inner_join(RENT,       by = c("GEOID","NAME","year")) |>
+  dplyr::inner_join(POPULATION, by = c("GEOID","NAME","year")) |>
+  dplyr::inner_join(HOUSEHOLDS, by = c("GEOID","NAME","year")) |>
+  dplyr::mutate(
+    CBSA  = as.double(GEOID),
+    state = stringr::str_extract(NAME, ", (.{2})", group = 1)
+  )
+# Scatter of median rent vs household income, 2009
+ggplot(
+  ACS |> dplyr::filter(year == 2009),
+  aes(x = household_income, y = monthly_rent)
+) +
+  geom_point(alpha = 0.5) +
+  geom_smooth(method = "lm", se = FALSE) +
+  scale_x_continuous(labels = scales::label_dollar()) +
+  scale_y_continuous(labels = scales::label_dollar()) +
+  labs(
+    title = "Rent vs Income by CBSA (2009)",
+    x = "Median Household Income (12-month, ACS)",
+    y = "Median Gross Rent (Monthly, ACS)",
+    caption = "Source: ACS 1-year estimates via tidycensus"
+  ) +
+  theme_minimal(base_size = 12)
+
+household_size <- ACS |>
+  dplyr::mutate(avg_household_size = population / pmax(households, 1L))
+
+# Simple spaghetti plot (set alpha so background lines fade)
+ggplot(household_size, aes(x = year, y = avg_household_size, group = NAME)) +
+  geom_line(alpha = 0.15) +
+  labs(
+    title = "Average Household Size Over Time by CBSA",
+    x = NULL, y = "Avg Household Size",
+    caption = "Computed as population / households (ACS 1-year)"
+  ) +
+  theme_minimal(base_size = 12)
+
+# Optional: highlight NYC and LA (requires 'gghighlight', skip if not installed)
+if (requireNamespace("gghighlight", quietly = TRUE)) {
+  household_size2 <- household_size |>
+    dplyr::mutate(highlight = dplyr::case_when(
+      stringr::str_detect(NAME, "^New York-Newark-Jersey City") ~ "NYC",
+      stringr::str_detect(NAME, "^Los Angeles-Long Beach-Anaheim") ~ "Los Angeles",
+      TRUE ~ "Other"
+    ))
+
+  library(gghighlight)
+  ggplot(household_size2, aes(x = year, y = avg_household_size, group = NAME,
+                              color = highlight, alpha = (highlight != "Other"))) +
+    geom_line() +
+    gghighlight(highlight != "Other", use_direct_label = TRUE) +
+    scale_alpha_manual(values = c(`TRUE` = 1, `FALSE` = 0.15), guide = "none") +
+    labs(
+      title = "Average Household Size Over Time — Highlighting NYC & LA",
+      x = NULL, y = "Avg Household Size", color = "Highlighted"
+    ) +
+    theme_minimal(base_size = 12)
+}
+rent_df <- ACS |>
+  dplyr::mutate(r2i = (12 * monthly_rent) / pmax(household_income, 1))
+
+baseline <- rent_df |>
+  dplyr::filter(year == 2014) |>
+  dplyr::summarise(b = stats::weighted.mean(r2i, w = population, na.rm = TRUE)) |>
+  dplyr::pull(b)
+
+rent_df <- rent_df |>
+  dplyr::mutate(RentBurdenIndex = 100 * r2i / baseline)
+
+# Top/Bottom 10 in latest year
+latest <- max(rent_df$year, na.rm = TRUE)
+
+rent_top <- rent_df |> dplyr::filter(year == latest) |>
+  dplyr::arrange(dplyr::desc(RentBurdenIndex)) |>
+  dplyr::select(NAME, state, year, monthly_rent, household_income, RentBurdenIndex)
+
+rent_bot <- rent_df |> dplyr::filter(year == latest) |>
+  dplyr::arrange(RentBurdenIndex) |>
+  dplyr::select(NAME, state, year, monthly_rent, household_income, RentBurdenIndex)
+
+pop_perm <- ACS |>
+  dplyr::select(CBSA, NAME, year, population) |>
+  dplyr::inner_join(PERMITS, by = c("CBSA","year")) |>
+  dplyr::group_by(CBSA) |>
+  dplyr::arrange(year, .by_group = TRUE) |>
+  dplyr::mutate(
+    pop_lag5    = dplyr::lag(population, 5),
+    pop_grow_5y = population - pop_lag5
+  ) |>
+  dplyr::ungroup() |>
+  dplyr::mutate(
+    HG_inst = 1000 * new_housing_units_permitted / pmax(population, 1),
+    HG_rate = 1000 * new_housing_units_permitted / pmax(pop_grow_5y, 1)
+  )
+
+hg_baseline <- pop_perm |>
+  dplyr::filter(year >= 2014) |>
+  dplyr::summarise(
+    base_inst = stats::weighted.mean(HG_inst, w = population, na.rm = TRUE),
+    base_rate = stats::weighted.mean(HG_rate[is.finite(HG_rate)],
+                                     w = population[is.finite(HG_rate)], na.rm = TRUE)
+  )
+
+HG <- pop_perm |>
+  dplyr::mutate(
+    HGinstIndex = 100 * HG_inst / hg_baseline$base_inst,
+    HGrateIndex = 100 * HG_rate / hg_baseline$base_rate,
+    HG_Composite = (HGinstIndex + HGrateIndex)/2
+  )
+window_start <- 2014
+window_end   <- 2023
+
+summary_cbsa <- ACS |>
+  dplyr::select(CBSA, NAME, year, population) |>
+  dplyr::inner_join(rent_df |> dplyr::select(CBSA, year, RentBurdenIndex),
+                    by = c("CBSA","year")) |>
+  dplyr::inner_join(HG |> dplyr::select(CBSA, year, HG_Composite),
+                    by = c("CBSA","year")) |>
+  dplyr::filter(year >= window_start, year <= window_end) |>
+  dplyr::group_by(CBSA, NAME) |>
+  dplyr::summarise(
+    rb_start = RentBurdenIndex[year == window_start] |> mean(na.rm = TRUE),
+    rb_end   = RentBurdenIndex[year == window_end]   |> mean(na.rm = TRUE),
+    pop_start = population[year == window_start]     |> mean(na.rm = TRUE),
+    pop_end   = population[year == window_end]       |> mean(na.rm = TRUE),
+    pop_delta = pop_end - pop_start,
+    HG_avg    = mean(HG_Composite, na.rm = TRUE),
+    .groups = "drop"
+  ) |>
+  dplyr::mutate(
+    had_high_rb_early = rb_start >= 110,
+    rb_decreased      = (rb_end - rb_start) < 0,
+    pop_grew          = pop_delta > 0,
+    above_avg_HG      = HG_avg >= 100
+  )
+
+# Plot: HG vs ΔRent Burden
+ggplot(summary_cbsa, aes(x = HG_avg, y = rb_end - rb_start)) +
+  geom_hline(yintercept = 0, linetype = "dotted") +
+  geom_vline(xintercept = 100, linetype = "dotted") +
+  geom_point(alpha = 0.6) +
+  labs(title = "Housing Growth vs Change in Rent Burden (2014→2023)",
+       x = "Avg Housing Growth Composite (100 = nat'l avg)",
+       y = "Change in Rent Burden Index") +
+  theme_minimal(base_size = 12)
+
+# Candidate "YIMBY success" CBSAs (all four criteria)
+yimby_success <- summary_cbsa |>
+  dplyr::filter(had_high_rb_early, rb_decreased, pop_grew, above_avg_HG) |>
+  dplyr::arrange(dplyr::desc(HG_avg), rb_end - rb_start)
+
+# Print top few
+yimby_success |> dplyr::slice_head(n = 15)
+
+yimby_success <- summary_cbsa |>
+  dplyr::filter(
+    had_high_rb_early,     # high rent burden early in period
+    rb_decreased,          # rent burden fell
+    pop_grew,              # population increased
+    above_avg_HG           # housing growth above US avg
+  ) |>
+  dplyr::arrange(dplyr::desc(HG_avg), rb_end - rb_start)
+
+yimby_success |> dplyr::slice_head(n = 10)
+
+nIMBY_fail <- summary_cbsa |>
+  dplyr::filter(!above_avg_HG, rb_end > rb_start | !pop_grew) |>
+  # sort: highest current rent burden first, then lowest HG
+  dplyr::arrange(dplyr::desc(rb_end), HG_avg)
+
+nIMBY_fail |> dplyr::slice_head(n = 10)
+
+#Task 7:Policy Brief: Making Backyards Affordable for All
+
+#Primary Sponsor Metro: Burlington, NC Metro Area
+#Co-Sponsor Metro: Miami–Fort Lauderdale, FL Metro Area
+
+##Housing affordability is a growing challenge across the U.S. Our analysis of ACS (2009–2023) and BLS QCEW data shows that metros that permit more housing experience lower rent burden and continued population growth, while low-building metros face rising rent pressure.
+
+#What Our Metrics Mean
+
+#Rent Burden Index (RBI)
+#Measures how much income households spend on rent.
+
+#100 = U.S. baseline
+
+#Higher = less affordable
+
+#Burlington improved from 112 → 90.5
+
+#Miami worsened from 136 → 144
+
+#Housing Growth Composite (HG)
+#Measures how many homes are permitted relative to demand.
+
+#100 = U.S. average
+
+#Burlington: 102
+
+#Miami: 35.8
+
+#Evidence of YIMBY Success
+
+#Burlington, NC:
+
+#Rent burden dropped significantly (112 → 90.5)
+
+#Population grew (+23,373 residents)
+
+#Housing growth kept pace (HG = 102)
+
+#This means homebuilding helped affordability.
+
+#❌ When Housing Doesn’t Keep Up
+
+#Miami–Fort Lauderdale:
+
+#Rent burden worsened (136 → 144)
+
+#Population grew +253,380
+
+#Housing growth very low (HG = 35.8)
+
+#High demand, insufficient supply → higher rents.
+
+#👥 Who Benefits
+
+#Health care workers (NAICS 62)
+#Large share of workforce in both metros — housing affordability improves staffing stability.
+
+#Finance & insurance workers (NAICS 52)
+#Common in Florida and North Carolina — lower rent frees income for saving and spending, supporting the local economy.
+
+# Policy Proposal
+
+#Create a Federal YIMBY Incentive Fund to:
+
+#Reward metros demonstrating housing production tied to affordability gains
+
+#Support high-burden metros in modernizing zoning & streamlining permitting
+
+#Prioritize infill, duplex/quadplex, and mid-rise “missing middle” housing
+
+#📌 Bottom Line
+
+#Burlington shows building works.
+#Miami shows what happens when it doesn’t.
+
+#Build more homes → lower rents → stronger workforce → thriving communities.
+
+
+
+```
+
