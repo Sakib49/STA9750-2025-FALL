@@ -454,8 +454,101 @@ nIMBY_fail |> dplyr::slice_head(n = 10)
 #Build more homes → lower rents → stronger workforce → thriving communities.
 options(STA9750.GITHUB_ID = "Sakib49")
 
+#task -5 visualisation
+#| label: fig-hg-scatter
+#| fig-cap: "Housing Growth — Instantaneous vs Rate-Based (color = Composite)"
+#| fig-width: 7
+#| fig-height: 5
 
+library(ggplot2)
+library(dplyr)
+library(scales)
+library(ggrepel)
 
+latest <- max(HG$year, na.rm = TRUE)
+
+hg_latest <- HG %>%
+  filter(year == latest, is.finite(HG_inst), is.finite(HG_rate)) %>%
+  # keep names & composite
+  select(NAME, CBSA, year, HG_inst, HG_rate, HG_Composite)
+
+ggplot(hg_latest, aes(x = HG_inst, y = HG_rate, color = HG_Composite)) +
+  geom_hline(yintercept = 0, linetype = "dotted") +
+  geom_vline(xintercept = 0, linetype = "dotted") +
+  geom_point(alpha = 0.7, size = 2) +
+  scale_color_viridis_c(option = "plasma", name = "HG Composite") +
+  scale_x_continuous("Permits per 1,000 residents (instant)", labels = label_number(accuracy = 0.1)) +
+  scale_y_continuous("Permits per 1,000 net new residents (5-yr)", labels = label_number(accuracy = 1)) +
+  labs(title = paste0("Housing Growth — Instant vs Rate (", latest, ")"),
+       caption = "Instant = permits / population; Rate = permits / 5-year population growth") +
+  theme_minimal(base_size = 12)
+
+#| label: fig-hg-topbars
+#| fig-cap: "Top 20 CBSAs by Housing Growth Composite (latest year)"
+#| fig-width: 7
+#| fig-height: 7
+
+hg_top <- HG %>%
+  filter(year == latest) %>%
+  arrange(desc(HG_Composite)) %>%
+  slice_head(n = 20) %>%
+  mutate(NAME = reorder(NAME, HG_Composite))
+
+ggplot(hg_top, aes(x = HG_Composite, y = NAME)) +
+  geom_col() +
+  geom_text(aes(label = round(HG_Composite, 1)),
+            hjust = -0.1, size = 3.2) +
+  scale_x_continuous("HG Composite (100 = U.S. avg)", limits = c(0, max(hg_top$HG_Composite)*1.15)) +
+  ylab(NULL) +
+  labs(title = paste0("Top 20 YIMBY CBSAs by Composite (", latest, ")"),
+       caption = "Composite = average of standardized instant and rate metrics") +
+  theme_minimal(base_size = 12)
+
+#| label: fig-hg-trends
+#| fig-cap: "Housing Growth Trends (Instant, Rate, Composite) — Selected CBSAs"
+#| fig-width: 7
+#| fig-height: 6
+
+focus_cities <- c("Burlington, NC Metro Area",
+                  "Miami-Fort Lauderdale-Pompano Beach, FL Metro Area")  # adjust if your NAME strings differ
+
+hg_focus <- HG %>%
+  filter(NAME %in% focus_cities) %>%
+  select(NAME, year, HG_inst, HG_rate, HG_Composite) %>%
+  tidyr::pivot_longer(cols = c(HG_inst, HG_rate, HG_Composite),
+                      names_to = "metric", values_to = "value") %>%
+  mutate(metric = dplyr::recode(metric,
+                                HG_inst = "Instant (per 1k residents)",
+                                HG_rate = "Rate (per 1k net new)",
+                                HG_Composite = "Composite (index)"))
+
+ggplot(hg_focus, aes(x = year, y = value, color = NAME)) +
+  geom_line(size = 1) +
+  facet_wrap(~ metric, scales = "free_y") +
+  scale_x_continuous(breaks = seq(min(hg_focus$year), max(hg_focus$year), by = 2)) +
+  labs(title = "Housing Growth Over Time — Burlington vs. Miami",
+       x = NULL, y = NULL, color = "CBSA",
+       caption = "Instant = permits/pop; Rate = permits/5-year pop growth; Composite = standardized average") +
+  theme_minimal(base_size = 12) +
+  theme(legend.position = "bottom")
+
+#| label: fig-hg-scatter-labeled
+#| fig-cap: "Instant vs Rate (labeled): Burlington & Miami"
+#| fig-width: 7
+#| fig-height: 5
+
+label_rows <- hg_latest %>% filter(NAME %in% focus_cities)
+
+ggplot(hg_latest, aes(x = HG_inst, y = HG_rate, color = HG_Composite)) +
+  geom_point(alpha = 0.6) +
+  ggrepel::geom_text_repel(data = label_rows, aes(label = NAME),
+                           size = 3.2, fontface = "bold", box.padding = 0.3) +
+  scale_color_viridis_c(option = "plasma", name = "HG Composite") +
+  scale_x_continuous("Permits per 1,000 residents (instant)", labels = label_number(accuracy = 0.1)) +
+  scale_y_continuous("Permits per 1,000 net new residents (5-yr)", labels = label_number(accuracy = 1)) +
+  labs(title = paste0("Housing Growth — Instant vs Rate (", latest, ")"),
+       caption = "Highlighted: Burlington, NC; Miami–Fort Lauderdale, FL") +
+  theme_minimal(base_size = 12)
 
 
 ```
