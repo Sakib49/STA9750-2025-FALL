@@ -630,3 +630,100 @@ ggplot(hg_latest, aes(x = HG_inst, y = HG_rate, color = HG_Composite)) +
 #Miami shows what happens when it doesn’t.
 
 #Build more homes → lower rents → stronger workforce → thriving communities.
+
+Report:
+
+Housing Affordability & Growth Report
+
+(ACS + Census Building Permits, 2009–2023)**
+
+Executive Summary
+
+This report analyzes U.S. housing affordability, population dynamics, and construction patterns from 2009–2023 using ACS 1-year estimates and Census building permits. We construct two custom indicators:
+
+Rent Burden Index (RBI)
+(100 = baseline affordability; >100 = more burden)
+Measures how rent affordability changed over time.
+
+Housing Growth Composite Index (HG)
+(100 = national average)
+Combines permitting per capita and permitting relative to population growth to identify “YIMBY metros” — regions building enough housing to meet demand.
+
+Key Findings
+
+Metros with higher permit activity experienced slower rent-burden growth or declines.
+
+Metros with low housing supply response faced sharply rising rent burden.
+
+Burlington, NC stands out as a YIMBY success — rising population with declining rent burden.
+
+Miami-Fort Lauderdale represents housing supply failure — strong population inflows, but insufficient housing supply → rapidly worsening rent pressure.
+
+Household size did not meaningfully increase, meaning overcrowding is not masking demand — supply truly fell behind in constrained markets.
+
+Across metros, median rent remains tightly correlated with median income, indicating standard economic forces still dominate regional housing markets.
+
+Data & Methods
+
+Data Sources
+
+ACS 1-year tables:
+
+Income (B19013)
+
+Rent (B25064)
+
+Population (B01003)
+
+Households (B11001)
+
+Census Building Permits Survey (2009–2023)
+
+BLS QCEW industry employment data (for workforce impact analysis)
+
+Key Metrics Constructed
+
+Rent Burden Index (RBI)
+
+RBI=Median RentMedian Income×100
+RBI=
+Median Income
+Median Rent
+	​
+
+×100
+
+Housing Growth Composite
+
+Instant permits per capita
+
+Permits relative to 5-year population growth
+
+Standardized + averaged
+
+YIMBY classification
+A metro is a “YIMBY success” if it:
+✅ had high rent burden early
+✅ reduced rent burden
+✅ grew population
+✅ built above the national average
+(Burlington, NC qualifies)
+
+Visual Findings & Interpretation
+1️⃣ Rent & Income Relationship (Scatterplot, 2009)
+
+A clear positive correlation — higher income metros pay more rent.
+This validates economic housing theory and confirms ACS reliability.
+
+2️⃣ Housing Permits Over Time (line plot)
+
+We see a strong post-2011 recovery in permitting nationally, but uneven across regions.
+
+Top builders: Houston, Dallas, NYC, Atlanta, DC
+Interpretation: Sun Belt and large metros have maintained strong supply pipelines.
+
+3️⃣ Burlington vs Miami Housing Growth (3-panel time series)
+Metric	Burlington, NC	Miami–Fort Lauderdale
+Housing growth	Consistent, near nat'l avg	Volatile, often below demand
+Population	Moderate growth	Very high growth
+Rent burden	Fell (112 → 90.5)	Rose sharply (136 → 144)
