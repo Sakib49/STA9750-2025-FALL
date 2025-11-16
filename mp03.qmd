@@ -1,0 +1,393 @@
+---
+title: "mp03"
+format: html
+execute: 
+  cache: true
+---
+
+```{r}
+library(sf)
+library(tidyverse)
+
+get_council_districts <- function() {
+  dir_path <- "data/mp03"
+  
+  # Search for any .shp file inside mp03 (recursively)
+  shp_files <- list.files(dir_path, pattern = "\\.shp$", full.names = TRUE, recursive = TRUE)
+  
+  if (length(shp_files) == 0) {
+    stop("No .shp file found in data/mp03. Make sure you manually extracted the shapefile there.")
+  }
+  
+  shp_file <- shp_files[1]   # take the first shapefile found
+  
+  message("Reading shapefile: ", shp_file)
+  
+  districts_raw <- sf::st_read(shp_file, quiet = TRUE)
+  districts <- sf::st_transform(districts_raw, crs = "WGS84")
+  
+  return(districts)
+}
+
+# ▶️ CALL FUNCTION *here*, NOT inside the function
+council_dists <- get_council_districts()
+
+
+library(httr2)
+
+get_tree_points <- function(limit = 50000) {
+  dir_path <- "data/mp03"
+  if (!dir.exists(dir_path)) {
+    dir.create(dir_path, recursive = TRUE)
+  }
+  
+  base_url <- "https://data.cityofnewyork.us/resource/hn5i-inap.geojson"
+  
+  all_files <- c()
+  offset    <- 0
+  keep_going <- TRUE
+  
+  while (keep_going) {
+    file_name <- sprintf("trees_%06d.geojson", offset)
+    file_path <- file.path(dir_path, file_name)
+    
+    if (!file.exists(file_path)) {
+      req <- request(base_url) |>
+        req_url_query(`$limit` = limit, `$offset` = offset)
+      
+      resp <- req_perform(req)
+      
+      out_con <- file(file_path, open = "wb")
+      writeBin(resp_body_raw(resp), out_con)
+      close(out_con)
+    }
+    
+    all_files <- c(all_files, file_path)
+    
+    tmp <- st_read(file_path, quiet = TRUE)
+    n_rows <- nrow(tmp)
+    
+    if (n_rows < limit) {
+      keep_going <- FALSE
+    } else {
+      offset <- offset + limit
+    }
+  }
+  
+  trees_list <- lapply(all_files, st_read, quiet = TRUE)
+  trees      <- bind_rows(trees_list)
+  
+  trees
+}
+
+trees_sf <- get_tree_points()
+
+set.seed(123)
+trees_small <- trees_sf |> dplyr::slice_sample(prop = 0.02)
+
+ggplot() +
+  geom_sf(data = council_dists, fill = NA, color = "grey40", linewidth = 0.3) +
+  geom_sf(data = trees_small, alpha = 0.1, size = 0.1, color = "darkgreen") +
+  theme_minimal()
+
+names(council_dists)
+
+dists_small <- council_dists |>
+  dplyr::select(CounDist, Shape_Area, geometry)
+
+# Spatial join: attach district info to each tree
+trees_with_district <- sf::st_join(
+  trees_sf,
+  dists_small,
+  join = sf::st_intersects,
+  left = TRUE
+)
+
+# Quick sanity check
+trees_with_district
+
+
+trees_by_dist <- trees_with_district |>
+  sf::st_drop_geometry() |>
+  dplyr::group_by(CounDist) |>
+  dplyr::summarise(
+    n_trees = dplyr::n(),
+    .groups = "drop"
+  ) |>
+  dplyr::arrange(dplyr::desc(n_trees))
+
+# Top district by count
+trees_by_dist |> dplyr::slice(1)
+
+trees_density <- trees_by_dist |>
+  dplyr::left_join(
+    council_dists |>
+      sf::st_drop_geometry() |>
+      dplyr::select(CounDist, Shape_Area),
+    by = "CounDist"
+  ) |>
+  dplyr::mutate(tree_density = n_trees / Shape_Area) |>
+  dplyr::arrange(dplyr::desc(tree_density))
+
+# District with highest tree density
+trees_density |> dplyr::slice(1)
+
+names(trees_with_district)
+
+colnames(trees_sf)
+names(trees_sf)
+names(council_dists)
+
+# Keep only relevant district columns
+dists_small <- council_dists |>
+  dplyr::select(CounDist, Shape_Area, geometry)
+
+# Spatial join: district info onto each tree
+trees_with_district <- sf::st_join(
+  trees_sf,
+  dists_small,
+  join = sf::st_intersects,
+  left = TRUE
+)
+
+trees_with_district
+
+# District with most trees
+trees_by_dist <- trees_with_district |>
+  sf::st_drop_geometry() |>
+  dplyr::group_by(CounDist) |>
+  dplyr::summarise(
+    n_trees = dplyr::n(),
+    .groups = "drop"
+  ) |>
+  dplyr::arrange(dplyr::desc(n_trees))
+
+# Top district by total trees
+trees_by_dist |> dplyr::slice(1)
+
+# District with highest tree density (trees per unit area)
+trees_density <- trees_by_dist |>
+  dplyr::left_join(
+    council_dists |>
+      sf::st_drop_geometry() |>
+      dplyr::select(CounDist, Shape_Area),
+    by = "CounDist"
+  ) |>
+  dplyr::mutate(tree_density = n_trees / Shape_Area) |>
+  dplyr::arrange(dplyr::desc(tree_density))
+
+# Top district by density
+trees_density |> dplyr::slice(1)
+
+trees_sf |>
+  sf::st_drop_geometry() |>
+  dplyr::count(tpcondition)
+
+dead_by_dist <- trees_with_district |>
+  sf::st_drop_geometry() |>
+  dplyr::group_by(CounDist) |>
+  dplyr::summarise(
+    n_trees = dplyr::n(),
+    n_dead  = sum(tpcondition == "Dead", na.rm = TRUE),
+    frac_dead = n_dead / n_trees,
+    .groups = "drop"
+  ) |>
+  dplyr::arrange(dplyr::desc(frac_dead))
+
+# District with highest fraction dead
+dead_by_dist |> dplyr::slice(1)
+
+# Add borough based on CounDist ranges
+trees_borough <- trees_with_district |>
+  dplyr::mutate(
+    borough = dplyr::case_when(
+      CounDist >= 1  & CounDist <= 10 ~ "Manhattan",
+      CounDist >= 11 & CounDist <= 18 ~ "Bronx",
+      CounDist >= 19 & CounDist <= 32 ~ "Queens",
+      CounDist >= 33 & CounDist <= 48 ~ "Brooklyn",
+      CounDist >= 49 & CounDist <= 51 ~ "Staten Island",
+      TRUE ~ NA_character_
+    )
+  )
+
+# Most common species in Manhattan (use genusspecies column)
+manhattan_species <- trees_borough |>
+  dplyr::filter(borough == "Manhattan") |>
+  sf::st_drop_geometry() |>
+  dplyr::count(genusspecies, sort = TRUE)
+
+# Top species
+manhattan_species |> dplyr::slice(1)
+
+new_st_point <- function(lat, lon){
+  sf::st_sfc(sf::st_point(c(lon, lat))) |>
+    sf::st_set_crs("WGS84")
+}
+
+# Approx coords for Baruch College
+baruch_point <- new_st_point(lat = 40.7403, lon = -73.9836)
+
+trees_with_distance <- trees_sf |>
+  dplyr::mutate(distance = sf::st_distance(geometry, baruch_point))
+
+closest_tree <- trees_with_distance |>
+  dplyr::slice_min(distance, n = 1)
+
+# Species of the closest tree (again, genusspecies)
+closest_tree$genusspecies
+
+trees_with_district <- sf::st_join(
+  trees_sf,
+  council_dists |> dplyr::select(CounDist, Shape_Area),
+  join = sf::st_intersects,
+  left = TRUE
+)
+
+# District-level summary: count, dead fraction, density
+dist_summary <- trees_with_district |>
+  sf::st_drop_geometry() |>
+  dplyr::group_by(CounDist) |>
+  dplyr::summarise(
+    n_trees  = dplyr::n(),
+    n_dead   = sum(tpcondition == "Dead", na.rm = TRUE),
+    frac_dead = n_dead / n_trees,
+    .groups = "drop"
+  ) |>
+  dplyr::left_join(
+    council_dists |> sf::st_drop_geometry() |> dplyr::select(CounDist, Shape_Area),
+    by = "CounDist"
+  ) |>
+  dplyr::mutate(tree_density = n_trees / Shape_Area)
+
+dist_summary |> dplyr::arrange(dplyr::desc(frac_dead)) |> head()
+
+# Option A: data-driven choice – highest fraction of dead trees
+my_dist <- dist_summary |>
+  dplyr::arrange(dplyr::desc(frac_dead)) |>
+  dplyr::slice(1) |>
+  dplyr::pull(CounDist)
+
+my_dist
+
+my_dist_poly <- council_dists |>
+  dplyr::filter(CounDist == my_dist)
+
+my_dist_trees <- trees_with_district |>
+  dplyr::filter(CounDist == my_dist)
+
+ggplot() +
+  geom_sf(data = my_dist_poly, fill = "white", color = "black") +
+  geom_sf(
+    data = my_dist_trees,
+    aes(color = tpcondition),
+    size = 0.7,
+    alpha = 0.7
+  ) +
+  coord_sf(
+    xlim = sf::st_bbox(my_dist_poly)[c("xmin", "xmax")],
+    ylim = sf::st_bbox(my_dist_poly)[c("ymin", "ymax")]
+  ) +
+  labs(
+    title = paste("Street Trees in Council District", my_dist),
+    subtitle = "Colored by tree condition",
+    color = "Condition"
+  ) +
+  theme_minimal()
+
+# Choose comparison districts (you can change these)
+comp_dists <- c(my_dist, 4, 10, 32)
+
+density_subset <- dist_summary |>
+  dplyr::filter(CounDist %in% comp_dists)
+
+ggplot(density_subset,
+       aes(x = factor(CounDist), y = tree_density)) +
+  geom_col() +
+  labs(
+    x = "Council District",
+    y = "Trees per square meter",
+    title = "Tree Density Across Selected NYC Council Districts"
+  ) +
+  theme_minimal()
+
+dead_subset <- dist_summary |>
+  dplyr::filter(CounDist %in% comp_dists)
+
+ggplot(dead_subset,
+       aes(x = factor(CounDist), y = frac_dead)) +
+  geom_col() +
+  labs(
+    x = "Council District",
+    y = "Fraction of trees recorded as Dead",
+    title = "Dead Tree Fraction in Selected Districts"
+  ) +
+  theme_minimal()
+my_stats <- dist_summary |>
+  dplyr::filter(CounDist == my_dist)
+
+my_stats
+
+my_dist <- 32   # choose District 32 (or any other you want)
+# Filter district polygon
+my_dist_poly <- council_dists |> 
+  dplyr::filter(CounDist == my_dist)
+
+# Filter trees inside the district
+my_dist_trees <- trees_with_district |> 
+  dplyr::filter(CounDist == my_dist)
+
+# Zoomed-in map
+ggplot() +
+  geom_sf(data = my_dist_poly, fill = "white", color = "black") +
+  geom_sf(data = my_dist_trees, aes(color = tpcondition), 
+          size = 0.7, alpha = 0.7) +
+  coord_sf(
+    xlim = sf::st_bbox(my_dist_poly)[c("xmin", "xmax")],
+    ylim = sf::st_bbox(my_dist_poly)[c("ymin", "ymax")]
+  ) +
+  scale_color_manual(values = c(
+    "Excellent" = "#1b7837",
+    "Good"      = "#7fbf7b",
+    "Fair"      = "#d9f0d3",
+    "Poor"      = "#fddbc7",
+    "Critical"  = "#b2182b",
+    "Dead"      = "black",
+    "Unknown"   = "grey70"
+  )) +
+  labs(
+    title = paste0("Street Trees in Council District ", my_dist),
+    subtitle = "Colored by tree condition",
+    color = "Condition"
+  ) +
+  theme_minimal()
+
+comp_dists <- c(my_dist, 39, 51, 4)  # You can change these
+
+dead_comp <- dead_by_dist |>
+  dplyr::filter(CounDist %in% comp_dists)
+
+# Bar chart comparison
+ggplot(dead_comp, aes(x = factor(CounDist), y = frac_dead)) +
+  geom_col(fill = "firebrick") +
+  labs(
+    title = "Fraction of Dead Trees Across Districts",
+    x = "Council District",
+    y = "Fraction Dead"
+  ) +
+  theme_minimal()
+
+other_dist <- 10  # pick a contrast district
+
+other_poly <- council_dists |> filter(CounDist == other_dist)
+other_trees <- trees_with_district |> filter(CounDist == other_dist)
+
+# Two-district comparison plot
+ggplot() +
+  geom_sf(data = my_dist_poly, fill = NA, color = "red", size = 1.2) +
+  geom_sf(data = other_poly, fill = NA, color = "blue", size = 1.2) +
+  labs(
+    title = paste("District", my_dist, "(Red) vs District", other_dist, "(Blue)"),
+    subtitle = "Territory comparison for tree maintenance planning"
+  ) +
+  theme_minimal()
+```
