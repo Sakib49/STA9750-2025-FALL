@@ -390,4 +390,45 @@ ggplot() +
     subtitle = "Territory comparison for tree maintenance planning"
   ) +
   theme_minimal()
+
+
+
 ```
+
+---
+
+## **NYC Parks Department Proposal — District 32 Tree Revitalization Initiative**
+
+Council District 32 contains one of the highest proportions of dead street trees in New York City. Based on the 2023–2025 Forestry Tree Points dataset, District 32 has over **4,300 dead trees**, representing **14.3%** of all trees in the district—the highest fraction among all 51 districts. Many of these trees are located near schools, bus corridors, and high-heat residential blocks, where tree canopy coverage is critical for public health and walkability.
+
+### **Proposed Project**
+We propose the **District 32 Tree Revitalization Initiative**, a targeted plan to remove dead trees and plant new, resilient species in areas with insufficient canopy coverage. This project focuses on replacing dangerous dead trees, improving shade coverage, enhancing stormwater capture, and restoring ecological balance.
+
+### **Quantitative Scope**
+- **Remove approximately 4,300 dead trees** (based on `tpcondition == "Dead"`).
+- **Plant 2,500 new trees** across major corridors and heat-vulnerable tracts.
+- Prioritize areas with **below-median tree density**, such as southeastern portions of the district.
+
+### **Evidence**
+A zoomed-in tree map of District 32 (Figure 1) demonstrates clusters of dead and poor-condition trees, especially near major avenues and residential blocks.  
+A comparison chart (Figure 2) shows that District 32 has a significantly higher fraction of dead trees than Districts 39, 51, and 4.  
+A district comparison map (Figure 3) illustrates that District 32 is both larger and more canopy-deficient than comparable districts.
+
+### **Why District 32 Should Be Prioritized**
+Dead trees pose safety hazards, reduce shade, and worsen heat-island exposure. District 32 is uniquely positioned for intervention because it simultaneously suffers from:
+- High absolute number of dead trees  
+- High dead-tree fraction  
+- Below-median shade coverage  
+- High pedestrian activity in many corridors  
+
+Investing in this district yields immediate safety benefits while enhancing long-term environmental resilience.
+
+### **Request**
+We request that the NYC Parks Department allocate funding for:
+1. Large-scale dead-tree removal  
+2. Planting of at least 2,500 new trees  
+3. Maintenance and monitoring over the next 3 years  
+
+This program will dramatically improve canopy coverage, pedestrian experience, and environmental equity across District 32.
+
+---
