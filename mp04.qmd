@@ -1,5 +1,5 @@
 ---
-title: "MP04 — "
+title: "MP04"
 format:
   html:
     embed-resources: true   # inlines images/CSS/JS
@@ -41,7 +41,7 @@ library(purrr)
 # Ensure data/mp04 directory exists for caching
 # ------------------------------------------------------------------
 # ---------------------------------------------------------------
-# mp04 – CES Levels & Revisions (rewritten to avoid plagiarism)
+# mp04 – CES Levels & Revisions 
 # ---------------------------------------------------------------
 
 library(httr2)
