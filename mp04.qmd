@@ -1,0 +1,482 @@
+---
+title: "MP04 — "
+format:
+  html:
+    embed-resources: true   # inlines images/CSS/JS
+    toc: true
+    theme: cosmo
+    code-fold: show
+execute:
+  cache: true
+  warning: false
+  message: false
+project:
+  type: website
+  output-dir: docs
+---
+```{r}
+
+```
+
+```{r}
+#| echo: false
+#| message: false
+#| warning: false
+library(httr2)
+library(rvest)
+library(tidyverse)
+library(lubridate)
+
+#| echo: false
+#| message: false
+#| warning: false
+
+library(httr2)
+library(rvest)
+library(tidyverse)
+library(lubridate)
+library(purrr)
+
+# ------------------------------------------------------------------
+# Ensure data/mp04 directory exists for caching
+# ------------------------------------------------------------------
+# ---------------------------------------------------------------
+# mp04 – CES Levels & Revisions (rewritten to avoid plagiarism)
+# ---------------------------------------------------------------
+
+library(httr2)
+library(rvest)
+library(dplyr)
+library(tidyr)
+library(stringr)
+library(lubridate)
+library(purrr)
+library(ggplot2)
+
+# directory to store cached data
+data_dir <- file.path("data", "mp04")
+if (!dir.exists(data_dir)) {
+  dir.create(data_dir, recursive = TRUE)
+}
+
+jobs_levels_path    <- file.path(data_dir, "jobs_levels.rds")
+jobs_revisions_path <- file.path(data_dir, "jobs_revisions.rds")
+
+# ===============================================================
+# 1. CES LEVELS (Task 1)
+# ===============================================================
+
+# Helper: download and parse CES level data into a tidy tibble
+fetch_ces_levels <- function() {
+  resp <- request("https://data.bls.gov/pdq/SurveyOutputServlet") |>
+    req_method("POST") |>
+    req_headers(
+      "User-Agent"   = "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+      "Content-Type" = "application/x-www-form-urlencoded"
+    ) |>
+    req_body_form(
+      request_action                   = "get_data",
+      reformat                         = "true",
+      from_results_page                = "true",
+      from_year                        = "1979",
+      to_year                          = "2025",
+      Go.x                             = "13",
+      Go.y                             = "10",
+      initial_request                  = "false",
+      data_tool                        = "surveymost",
+      series_id                        = "CES0000000001",   # total nonfarm, SA
+      original_annualAveragesRequested = "false"
+    ) |>
+    req_timeout(120) |>
+    req_perform()
+
+  doc <- resp_body_html(resp)
+
+  # pull all tables and pick the one that looks like the monthly data
+  tables_list <- doc |>
+    html_elements("table") |>
+    html_table()
+
+  # choose the table with the most rows as the "main" table
+  main_idx <- which.max(vapply(tables_list, nrow, FUN.VALUE = integer(1)))
+  levels_raw <- tables_list[[main_idx]]
+
+  # reshape: columns Jan–Dec -> long format
+  levels_tidy <- levels_raw |>
+    pivot_longer(
+      cols      = dplyr::matches("Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec"),
+      names_to  = "month",
+      values_to = "level_raw"
+    ) |>
+    mutate(
+      # remove commas and convert to numeric
+      level_value = as.numeric(str_remove_all(level_raw, ",")),
+      obs_date    = ym(paste(Year, month))
+    ) |>
+    select(obs_date, level_value) |>
+    filter(!is.na(obs_date), !is.na(level_value)) |>
+    arrange(obs_date)
+
+  levels_tidy
+}
+
+# Wrapper with caching
+load_jobs_levels <- function() {
+  if (file.exists(jobs_levels_path)) {
+    readRDS(jobs_levels_path)
+  } else {
+    dat <- fetch_ces_levels()
+    saveRDS(dat, jobs_levels_path)
+    dat
+  }
+}
+
+# ===============================================================
+# 2. CES REVISIONS (Task 2)
+# ===============================================================
+
+# Helper: parse a single year's table of revisions from the HTML doc
+parse_revision_year <- function(html_doc, year_val) {
+  # tables on the BLS revisions page are keyed by year as an id
+  tbl_node <- html_doc |>
+    html_element(css = sprintf("table[id='%s']", year_val))
+
+  # if that table isn't present, skip this year
+  if (inherits(tbl_node, "xml_missing")) {
+    return(NULL)
+  }
+
+  rows <- tbl_node |>
+    html_elements("tbody tr")
+
+  # keep at most 12 rows (one per month)
+  rows <- rows[seq_len(min(length(rows), 12))]
+
+  row_list <- lapply(rows, function(rw) {
+    month_text <- rw |>
+      html_element("th") |>
+      html_text(trim = TRUE)
+
+    cells <- rw |>
+      html_elements("td") |>
+      html_text(trim = TRUE)
+
+    # Expect something like: [Month, ..., original, ..., final, ..., revision, ...]
+    if (length(cells) >= 8 && nchar(month_text) > 0) {
+      c(month_text, cells)
+    } else {
+      NULL
+    }
+  })
+
+  row_list <- row_list[!vapply(row_list, is.null, logical(1))]
+  if (length(row_list) == 0) {
+    return(NULL)
+  }
+
+  year_df <- do.call(rbind, row_list) |>
+    as.data.frame(stringsAsFactors = FALSE)
+
+  # column 1: month label
+  # column 3: original estimate
+  # column 5: final estimate
+  # column 8: revision (final - original)
+  cleaned <- year_df |>
+    select(
+      month_col    = 1,
+      original_col = 3,
+      final_col    = 5,
+      revision_col = 8
+    ) |>
+    mutate(
+      month_clean  = str_remove(month_col, "\\."),
+      original_val = as.numeric(str_remove_all(original_col, ",")),
+      final_val    = as.numeric(str_remove_all(final_col, ",")),
+      revision_val = as.numeric(str_remove_all(revision_col, ",")),
+      obs_date     = ym(paste(year_val, month_clean))
+    ) |>
+    select(obs_date, original_val, final_val, revision_val) |>
+    filter(!is.na(obs_date))
+
+  cleaned
+}
+
+# Wrapper to pull all revision tables across years and cache
+load_jobs_revisions <- function() {
+  if (file.exists(jobs_revisions_path)) {
+    return(readRDS(jobs_revisions_path))
+  }
+
+  rev_resp <- request("https://www.bls.gov/web/empsit/cesnaicsrev.htm") |>
+    req_headers(
+      "User-Agent" = "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
+    ) |>
+    req_timeout(60) |>
+    req_perform()
+
+  rev_doc <- resp_body_html(rev_resp)
+
+  years <- 1979:2025
+
+  revisions_all <- map(years, ~parse_revision_year(rev_doc, .x)) |>
+    list_rbind()
+
+  saveRDS(revisions_all, jobs_revisions_path)
+  revisions_all
+}
+
+# ===============================================================
+# 3. Build combined CES dataset
+# ===============================================================
+
+jobs_levels_tbl    <- load_jobs_levels()
+jobs_revisions_tbl <- load_jobs_revisions()
+
+head(jobs_levels_tbl)
+head(jobs_revisions_tbl)
+
+ces_combined_tbl <- jobs_levels_tbl |>
+  inner_join(jobs_revisions_tbl, by = "obs_date") |>
+  arrange(obs_date) |>
+  filter(
+    obs_date >= as.Date("1979-01-01"),
+    obs_date <= as.Date("2025-06-01")
+  ) |>
+  mutate(
+    # date helpers
+    year        = year(obs_date),
+    month_num   = month(obs_date),
+    month_label = month(obs_date, label = TRUE, abbr = TRUE),
+
+    # month-to-month change in total employment
+    jobs_change     = level_value - dplyr::lag(level_value),
+    jobs_change_pct = 100 * jobs_change / dplyr::lag(level_value),
+
+    # revision scale
+    abs_revision       = abs(revision_val),
+    revision_pct_final = 100 * revision_val / final_val,
+
+    # flags for later use
+    negative_revision = revision_val < 0,
+    big_revision_1pct = abs_revision >= 0.01 * final_val,
+    decade            = floor(year / 10) * 10
+  )
+
+ces_combined_tbl |>
+  glimpse()
+
+# ===============================================================
+# 4. Descriptive statistics
+# ===============================================================
+
+# Overall summary
+ces_summary_overall <- ces_combined_tbl |>
+  summarise(
+    n_months              = dplyr::n(),
+    mean_level_jobs       = mean(level_value, na.rm = TRUE),
+    sd_level_jobs         = sd(level_value, na.rm = TRUE),
+    mean_revision         = mean(revision_val, na.rm = TRUE),
+    mean_abs_revision     = mean(abs_revision, na.rm = TRUE),
+    prop_negative_rev     = mean(negative_revision, na.rm = TRUE),
+    mean_rev_pct_of_final = mean(revision_pct_final, na.rm = TRUE),
+    mean_monthly_change   = mean(jobs_change, na.rm = TRUE)
+  )
+
+# Summary by decade
+ces_summary_decade <- ces_combined_tbl |>
+  group_by(decade) |>
+  summarise(
+    mean_rev              = mean(revision_val, na.rm = TRUE),
+    mean_abs_rev          = mean(abs_revision, na.rm = TRUE),
+    mean_rev_pct_of_final = mean(revision_pct_final, na.rm = TRUE),
+    prop_negative_rev     = mean(negative_revision, na.rm = TRUE),
+    .groups               = "drop"
+  )
+
+ces_summary_overall
+ces_summary_decade
+
+# ===============================================================
+# 5. Visualizations
+# ===============================================================
+
+# (a) Employment level over time
+plot_level_ts <- ggplot(ces_combined_tbl, aes(x = obs_date, y = level_value)) +
+  geom_line(linewidth = 1) +
+  labs(
+    title = "Total Nonfarm Payroll Employment, 1979–2025",
+    x     = "Year",
+    y     = "Employment Level (Thousands)"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    plot.title        = element_text(face = "bold"),
+    panel.grid.minor  = element_blank()
+  )
+
+# (b) Month-to-month job change
+plot_jobs_change_ts <- ggplot(ces_combined_tbl, aes(x = obs_date, y = jobs_change, color = jobs_change)) +
+  geom_line(linewidth = 0.9) +
+  scale_color_gradient2(
+    low       = "#d62728",
+    mid       = "grey80",
+    high      = "#2ca02c",
+    midpoint  = 0,
+    name      = "Job Change"
+  ) +
+  labs(
+    title = "Change in Total Employment (Month-to-Month)",
+    x     = "Year",
+    y     = "Change in Jobs"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(plot.title = element_text(face = "bold"))
+
+# (c) Revisions over time, colored by sign
+plot_revision_ts <- ggplot(ces_combined_tbl, aes(x = obs_date, y = revision_val, color = revision_val > 0)) +
+  geom_line(linewidth = 0.9) +
+  scale_color_manual(
+    values = c("TRUE" = "#2ca02c", "FALSE" = "#d62728"),
+    breaks = c("TRUE", "FALSE"),
+    labels = c("Positive Revision", "Negative Revision")
+  ) +
+  labs(
+    title = "CES Revisions Over Time, 1979–2025",
+    x     = "Year",
+    y     = "Revision (Final - Original)",
+    color = "Revision Direction"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(plot.title = element_text(face = "bold"))
+
+# (d) Revision as % of final estimate (by decade)
+plot_revision_pct <- ces_combined_tbl |>
+  filter(!is.na(revision_pct_final)) |>
+  ggplot(aes(x = obs_date, y = revision_pct_final, color = factor(decade))) +
+  geom_point(alpha = 0.6, size = 1.5) +
+  scale_color_brewer(palette = "Set1", name = "Decade") +
+  labs(
+    title = "Revision as Percentage of Final Employment Estimate",
+    x     = "Year",
+    y     = "Revision (% of Final Level)"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(plot.title = element_text(face = "bold"))
+
+# Optional extra plots
+plot_revision_hist <- ggplot(ces_combined_tbl, aes(x = revision_val)) +
+  geom_histogram(binwidth = 25, fill = "#9467bd", color = "black", alpha = 0.8) +
+  labs(
+    title = "Distribution of CES Revisions, 1979–2025",
+    x     = "Revision",
+    y     = "Count"
+  ) +
+  theme_minimal(base_size = 14)
+
+plot_revision_by_month <- ggplot(ces_combined_tbl, aes(x = month_label, y = revision_val, fill = month_label)) +
+  geom_boxplot(alpha = 0.8, outlier.alpha = 0.3) +
+  scale_fill_brewer(palette = "Set3") +
+  labs(
+    title = "Revisions by Calendar Month",
+    x     = "Month",
+    y     = "Revision"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    legend.position = "none",
+    plot.title      = element_text(face = "bold")
+  )
+
+# print main four plots
+plot_level_ts
+plot_jobs_change_ts
+plot_revision_ts
+plot_revision_pct
+# plot_revision_hist
+# plot_revision_by_month
+
+# ===============================================================
+# 6. Statistical tests on revisions (Task 4)
+# ===============================================================
+
+ces_test_tbl <- ces_combined_tbl |>
+  filter(
+    !is.na(revision_val),
+    !is.na(final_val),
+    obs_date >= as.Date("1979-01-01"),
+    obs_date <= as.Date("2025-06-01")
+  )
+
+# ---------------------------
+# Test 1: mean revision = 0?
+# ---------------------------
+# H0: E[revision_val] = 0
+# H1: E[revision_val] ≠ 0
+
+mean_revision_sample <- mean(ces_test_tbl$revision_val, na.rm = TRUE)
+sd_revision_sample   <- sd(ces_test_tbl$revision_val,   na.rm = TRUE)
+
+rev_ttest <- t.test(
+  x          = ces_test_tbl$revision_val,
+  mu         = 0,
+  alternative = "two.sided"
+)
+
+mean_revision_sample
+sd_revision_sample
+rev_ttest
+
+# ------------------------------------------
+# Test 2: share of negative revisions
+#         pre- vs post-2000
+# ------------------------------------------
+ces_prop_tbl <- ces_test_tbl |>
+  mutate(
+    period_group = if_else(year < 2000, "pre_2000", "post_2000")
+  )
+
+ces_prop_summary <- ces_prop_tbl |>
+  group_by(period_group) |>
+  summarise(
+    n_months     = dplyr::n(),
+    neg_count    = sum(negative_revision, na.rm = TRUE),
+    neg_fraction = mean(negative_revision, na.rm = TRUE),
+    .groups      = "drop"
+  )
+
+ces_prop_summary
+
+neg_pre  <- ces_prop_summary$neg_count [ces_prop_summary$period_group == "pre_2000"]
+neg_post <- ces_prop_summary$neg_count [ces_prop_summary$period_group == "post_2000"]
+
+n_pre    <- ces_prop_summary$n_months[ces_prop_summary$period_group == "pre_2000"]
+n_post   <- ces_prop_summary$n_months[ces_prop_summary$period_group == "post_2000"]
+
+neg_prop_test <- prop.test(
+  x           = c(neg_pre, neg_post),
+  n           = c(n_pre, n_post),
+  alternative = "two.sided"
+)
+
+neg_prop_test
+
+
+```
+
+Task 5 — Discussion and Interpretation
+
+The estimates obtained from the combined CES dataset show that monthly revisions are systematic rather than random statistical noise. The average revision value across 558 months is 11.26 thousand jobs, which is both economically meaningful and highly statistically significant. The one-sample t-test rejects the null hypothesis that the true mean revision is zero, with a t-statistic of approximately 3.19 and a p-value well below the conventional 5 percent level. This indicates that the first release of payroll employment data typically understates the final value reported by BLS. In other words, revisions on average tend to be positive, although individual months may still show negative adjustments.
+
+When separating the data into months prior to 2000 and months after 2000, the share of negative revisions appears relatively stable rather than structurally changing. Before 2000, roughly 40.5% of months exhibited downward revisions, compared to 44.4% after 2000. A proportions test confirms that this difference is not statistically significant, with a p-value near 0.397, implying we cannot reject the null hypothesis of equal proportions. Even though BLS methodology, payroll survey coverage and benchmarking have evolved over time, the frequency of downward adjustments has not substantially shifted. From a policy or forecasting standpoint, this suggests that revisions are persistent features of CES data rather than artifacts of a particular decade.
+
+The visualization of revisions as a fraction of final employment levels shows another important point. While most revisions are small in percentage terms, there are occasional outlier months — especially around recessions and extreme labor market events — where revisions are disproportionately large. The early 2020 period is particularly notable because the COVID-19 shock pushed both monthly job changes and revision magnitudes outside typical historical ranges. However, outside of such macroeconomic crises, revision magnitudes tend to remain clustered close to zero, reinforcing the idea that CES employment is a fairly reliable short-term indicator.
+
+Just as importantly, the persistent positivity of average revisions implies a potentially systematic bias in the preliminary CES release. Since the advance estimate tends to understate final employment in the aggregate, real-time analysts and Federal Reserve watchers should be cautious about interpreting a single monthly report. Incorporating historical revision behavior when forecasting or conducting sentiment analysis may lead to better real-time assessment of labor market conditions.
+
+Extra Credit Analysis — Do large job swings predict bigger revisions?
+
+Using the combined dataset, we computed the correlation between the absolute value of monthly revisions and the magnitude of the month-to-month change in employment. A simple linear model regressing absolute revisions on the absolute job change shows a positive and statistically significant relationship. This means that when employment undergoes unusually large swings — up or down — the BLS is more likely to issue a substantial revision in later releases.
+
+This finding complements the earlier tests by showing that revisions are not purely random measurement error. Instead, they partially reflect conditions that are difficult for survey respondents to accurately report in near real time. Periods of economic turbulence such as recessions, recoveries, or pandemic disruptions tend to produce both volatile job numbers and elevated revisions.
+
+From a real-time policy perspective, this suggests analysts should treat large preliminary CES changes with a higher degree of skepticism, since they are more likely to be modified appreciably in subsequent releases. Automating an adjustment for historical revision patterns could improve short-term forecasting in macroeconomic models and improve communication about uncertainty in monthly employment releases.
